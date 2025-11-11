@@ -1,0 +1,17 @@
+| _ | 0       | 1        | 2         | 3         | 4          | 5          | 6         | 7      | 8      | 9      | A      | B       | C       | D       | E       | F       |
+| 0 | ret     | const_0  | const_1   | i_const_0 | i_const_1  | load_const | load_fn   | load_0 | load_1 | load_2 | load_3 | load_n  | store_0 | store_1 | store_2 | store_3 |
+| 1 | store_n | discard  | dup       | ...       |
+| 2 | add     | sub      | mul       | div       | n_to_i     |
+| 3 | i_add   | i_sub    | i_mul     | i_div     | i_to_n     | i_shl      | i_shr     | i_ushr | i_neg  | i_and  | i_or   | i_xor   | i_rem   | ...     |          |         |
+| 4 | call_fn | call_slf | apply     | if_zero   | if_nil     | if_not_nil |
+| 5 | arr_new | arr_get  | arr_set   | arr_len   | arr_init   | arr_slice  | arr_cpy(src, dst)  | ...
+| 6 | cmpeq   | cmpgt    | cmplt     | and       | or         |
+| 7 |
+| 8 |
+| 9 |
+| A |
+| B |
+| C |
+| D |
+| E |
+| F |

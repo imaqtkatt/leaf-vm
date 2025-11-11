@@ -1,0 +1,29 @@
+Chunk {
+    magic: u32 = ???,
+    version: u16,
+    name_len: u32,
+    name: [name_len]u8,
+    references: ???,
+    constant_count: u32,
+    constants: [constant_count]Constant,
+    function_count: u32,
+    functions: [function_count]Function,
+}
+
+Constant = enum {
+    string(0x1): {
+        len: u32,
+        data: [len]u8,
+    },
+    number(0x2): { value: u64 },
+    integer(0x3): { value: u32 },
+}
+
+Function {
+    name_len: u32,
+    name: [name_len]u8,
+    arity: u8,
+    locals: u16,
+    code_len: u32,
+    code: [code_len]u8,
+}
