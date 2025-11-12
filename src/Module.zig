@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const Allocator = std.mem.Allocator;
+
 const object = @import("object.zig");
 const reader = @import("reader.zig");
 const Value = @import("value.zig").Value;
@@ -12,7 +14,7 @@ references: reader.References,
 constants: []Value,
 functions: std.StringArrayHashMapUnmanaged(*object.FunctionObject),
 
-pub fn init(allocator: std.mem.Allocator, module: reader.Module) !*Module {
+pub fn init(allocator: Allocator, module: reader.Module) !*Module {
     const ptr = try allocator.create(Module);
 
     ptr.name = module.name;
@@ -33,20 +35,11 @@ pub fn init(allocator: std.mem.Allocator, module: reader.Module) !*Module {
     return ptr;
 }
 
-pub fn deinit(self: *Module, allocator: std.mem.Allocator) void {
-    // allocator.free(self.name);
-    // allocator.free(self.references);
-    allocator.free(self.constants);
-    allocator.free(self.functions);
-
-    allocator.destroy(self);
-}
-
 pub const Registry = struct {
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     modules: std.StringHashMap(*Module),
 
-    pub fn init(allocator: std.mem.Allocator) Registry {
+    pub fn init(allocator: Allocator) Registry {
         const modules = std.StringHashMap(*Module).init(allocator);
         return .{ .allocator = allocator, .modules = modules };
     }

@@ -67,8 +67,7 @@ pub fn mark(roots: std.ArrayList(Value)) void {
 
 fn markValue(value: Value) void {
     const header = value.asHeader();
-    if (header.marked.swap(true, .seq_cst)) return;
-    traceValue(value);
+    if (header.marked.swap(true, .seq_cst)) return else traceValue(value);
 }
 
 fn traceValue(value: Value) void {
