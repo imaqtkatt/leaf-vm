@@ -1,17 +1,17 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const leaf = @import("leaf");
 
-const opcodes = @import("opcodes.zig");
-
 const Gc = @import("Gc.zig");
+const Module = @import("Module.zig");
+const opcodes = @import("opcodes.zig");
 const reader = @import("reader.zig");
 const Function = reader.Function;
 const Constant = reader.Constant;
+const Runtime = @import("runtime.zig");
 const Stack = @import("stack.zig").Stack;
 const Value = @import("value.zig").Value;
-const Runtime = @import("runtime.zig");
-const Module = @import("Module.zig");
 
 pub fn main() !void {
     // Prints to stderr, ignoring potential errors.
@@ -31,13 +31,15 @@ pub fn main() !void {
     const constant_pool_allocator = constant_pool_arena.allocator();
     defer constant_pool_arena.deinit();
 
-    const gc = &Gc.debug;
-    defer gc.deinitDebug();
+    const gc = if (builtin.mode == .Debug) &Gc.debug else &Gc.default;
+    defer if (builtin.mode == .Debug) gc.deinitDebug() else gc.deinit();
 
     var registry = Module.Registry.init(constant_pool_allocator);
 
     try registry.insertModule(moduleExample());
     defer registry.deinit();
+
+    try registry.linkModules();
 
     const runtime = try Runtime.boot(gc, &registry, "main");
     defer runtime.deinit();
@@ -61,8 +63,11 @@ fn moduleExample() reader.Module {
                 "fib",
             }),
         },
+        .reference_indexes = @constCast(&[_]reader.RefIndex{
+            reader.RefIndex{ .module_idx = 0, .function_idx = 1 },
+        }),
         .constants = @constCast(&[_]Constant{
-            Constant{ .integer = .{ .value = 7 } },
+            Constant{ .integer = .{ .value = 35 } },
             Constant{ .integer = .{ .value = 2 } },
         }),
         .functions = @constCast(&[_]Function{

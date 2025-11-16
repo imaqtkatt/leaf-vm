@@ -1,5 +1,4 @@
 const std = @import("std");
-
 const Allocator = std.mem.Allocator;
 
 const object = @import("object.zig");
@@ -11,6 +10,7 @@ const Module = @This();
 
 name: []const u8,
 references: reader.References,
+reference_indexes: []RefIndex,
 constants: []Value,
 functions: std.StringArrayHashMapUnmanaged(*object.FunctionObject),
 
@@ -19,6 +19,16 @@ pub fn init(allocator: Allocator, module: reader.Module) !*Module {
 
     ptr.name = module.name;
     ptr.references = module.references;
+
+    ptr.reference_indexes = try allocator.alloc(RefIndex, module.reference_indexes.len);
+    for (module.reference_indexes, 0..) |ref_index, idx| {
+        ptr.reference_indexes[idx] = .{
+            .module_idx = ref_index.module_idx,
+            .module = undefined,
+            .function_idx = ref_index.function_idx,
+            .function = undefined,
+        };
+    }
 
     ptr.constants = try allocator.alloc(Value, module.constants.len);
     for (module.constants, 0..) |constant, idx| {
@@ -34,6 +44,14 @@ pub fn init(allocator: Allocator, module: reader.Module) !*Module {
 
     return ptr;
 }
+
+pub const RefIndex = struct {
+    module_idx: u16,
+    module: *Module,
+
+    function_idx: u16,
+    function: *object.FunctionObject,
+};
 
 pub const Registry = struct {
     allocator: Allocator,
@@ -59,18 +77,28 @@ pub const Registry = struct {
     }
 
     pub const LinkError = error{
-        unknown_module,
-        unknown_function,
+        UnknownModule,
+        UnknownFunction,
     };
 
-    // TODO: fetching the modules and functions from modules is clearly a bottleneck
-    // find a good way to remove this overhead by making this "link" step.
-    //
-    // I think the best way would be to add an indirection to the module:function names.
-    // the instruction [call_fn idx] would point to a new structure that points to the
-    // module:function names, the link function would change this structure to handle
-    // both module and function pointers.
-    pub fn linkModules(_: *Registry) LinkError!void {
-        @panic("unimplemented");
+    pub fn linkModules(self: *Registry) LinkError!void {
+        var iter = self.modules.valueIterator();
+
+        while (iter.next()) |entry| {
+            const module = entry.*;
+            const references = module.references;
+
+            for (module.reference_indexes) |*ref_idx| {
+                const module_name = references.modules[ref_idx.module_idx];
+                const function_name = references.functions[ref_idx.function_idx];
+
+                const ref_module = self.modules.get(module_name) orelse return LinkError.UnknownModule;
+                ref_idx.module = ref_module;
+
+                const ref_function = ref_module.functions.get(function_name) orelse return LinkError.UnknownFunction;
+                ref_idx.function = ref_function;
+            }
+        }
+        // @panic("unimplemented");
     }
 };

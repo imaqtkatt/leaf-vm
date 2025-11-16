@@ -1,6 +1,6 @@
 pub const StackError = error{
-    stack_overflow,
-    stack_underflow,
+    StackOverflow,
+    StackUnderflow,
 };
 
 pub const FrameInfo = struct {
@@ -25,7 +25,7 @@ pub fn Stack(comptime T: type, comptime N: usize) type {
             const new_local_base = self.ptr;
             const new_stack_base = self.ptr + local_count;
 
-            if (new_stack_base >= N) return StackError.stack_overflow;
+            if (new_stack_base >= N) return StackError.StackOverflow;
             self.ptr = new_stack_base;
 
             self.local_base = new_local_base;
@@ -43,20 +43,20 @@ pub fn Stack(comptime T: type, comptime N: usize) type {
         }
 
         pub inline fn push(self: *Self, value: T) StackError!void {
-            if (self.ptr >= N) return StackError.stack_overflow;
+            if (self.ptr >= N) return StackError.StackOverflow;
 
             self.data[self.ptr] = value;
             self.ptr += 1;
         }
 
         pub inline fn pop(self: *Self) StackError!T {
-            if (self.ptr == 0) return StackError.stack_underflow;
+            if (self.ptr == 0) return StackError.StackUnderflow;
             self.ptr -= 1;
             return self.data[self.ptr];
         }
 
         pub inline fn popN(self: *Self, count: usize) StackError![]T {
-            if (self.ptr < count) return StackError.stack_underflow;
+            if (self.ptr < count) return StackError.StackUnderflow;
 
             const values = self.data[self.ptr - count .. self.ptr];
             self.ptr -= count;
@@ -91,7 +91,7 @@ test "test stack underflow" {
     _ = try stack.pop();
 
     _ = stack.pop() catch |err| switch (err) {
-        StackError.stack_underflow => try std.testing.expect(true),
+        StackError.StackUnderflow => try std.testing.expect(true),
         else => try std.testing.expect(false),
     };
 }

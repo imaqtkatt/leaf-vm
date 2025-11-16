@@ -10,6 +10,7 @@ const RuntimeModule = @import("Module.zig");
 pub const Module = struct {
     name: []const u8,
     references: References,
+    reference_indexes: []RefIndex,
     constants: []Constant,
     functions: []Function,
 
@@ -25,6 +26,11 @@ pub const References = struct {
     pub fn read(_: *std.Io.Reader, _: Allocator) !References {
         @panic("unimplemented");
     }
+};
+
+pub const RefIndex = struct {
+    module_idx: u16,
+    function_idx: u16,
 };
 
 pub const Function = struct {

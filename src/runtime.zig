@@ -1,55 +1,82 @@
 const std = @import("std");
 
-const Frame = @import("Frame.zig");
 const Gc = @import("Gc.zig");
 const Module = @import("Module.zig");
 const Registry = Module.Registry;
-const Stack = @import("stack.zig").Stack;
-const Value = @import("value.zig").Value;
 const object = @import("object.zig");
 const opcodes = @import("opcodes.zig");
+const stack_ = @import("stack.zig");
+const Stack = stack_.Stack;
+const FrameInfo = stack_.FrameInfo;
+const Value = @import("value.zig").Value;
 
-const MAX_STACK: usize = 4096;
 const MAX_FRAMES: usize = 1024;
 
-// TODO: change it to a fixed Frame buffer
-var frame_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-const frame_allocator = frame_arena.allocator();
+pub const Frame = struct {
+    ip: u32,
+    frame_info: FrameInfo,
+    module: *Module,
+    function: *object.FunctionObject,
+    prev: ?*Frame,
+};
+
+const MAX_STACK: usize = 4096;
 
 gc: *Gc,
 registry: *Registry,
 stack: Stack(Value, MAX_STACK),
 frame: ?*Frame,
 
+frame_buf: [@sizeOf(Frame) * MAX_FRAMES]u8,
+frame_fba: std.heap.FixedBufferAllocator,
+frame_allocator: std.mem.Allocator,
+
 pub const RuntimeError = error{
-    type_error,
-    arity_error,
+    TypeError,
+    ArityError,
+    FrameBufferOverflow,
 };
 
 const Runtime = @This();
 
 pub inline fn boot(gc: *Gc, registry: *Registry, mainModule: []const u8) !*Runtime {
     const ptr = try gc.allocator.create(Runtime);
-    ptr.gc = gc;
-    ptr.registry = registry;
-    ptr.stack = Stack(Value, MAX_STACK){};
+    {
+        ptr.gc = gc;
+        ptr.registry = registry;
+        ptr.stack = Stack(Value, MAX_STACK){};
+    }
+    {
+        ptr.frame_buf = undefined;
+        ptr.frame_fba = std.heap.FixedBufferAllocator.init(&ptr.frame_buf);
+        ptr.frame_allocator = ptr.frame_fba.allocator();
+    }
 
     const main = ptr.registry.fetchModule(mainModule) orelse unreachable;
     const mainFn = main.functions.get("main") orelse unreachable;
-    if (mainFn.arity > 0) return RuntimeError.arity_error;
+    if (mainFn.arity > 0) return RuntimeError.ArityError;
+
     try ptr.pushFrame(main, mainFn, null);
 
     return ptr;
 }
 
 pub fn deinit(self: *Runtime) void {
-    frame_arena.deinit();
     self.gc.allocator.destroy(self);
 }
 
 inline fn pushFrame(self: *Runtime, module: *Module, function: *object.FunctionObject, prev: ?*Frame) anyerror!void {
     const frame_info = try self.stack.pushFrame(function.locals);
-    self.frame = try Frame.init(frame_allocator, module, function, frame_info, prev);
+
+    const ptr = self.frame_allocator.create(Frame) catch return RuntimeError.FrameBufferOverflow;
+    ptr.* = .{ .ip = 0, .module = module, .function = function, .frame_info = frame_info, .prev = prev };
+    self.frame = ptr;
+}
+
+inline fn popFrame(self: *Runtime, current_frame: *Frame) anyerror!void {
+    try self.stack.popFrame(current_frame.frame_info);
+    self.frame = current_frame.prev;
+    self.frame_allocator.destroy(current_frame);
 }
 
 pub inline fn run(self: *Runtime) anyerror!void {
@@ -58,10 +85,7 @@ pub inline fn run(self: *Runtime) anyerror!void {
         frame.ip += 1;
 
         switch (bytecode) {
-            opcodes.ret => {
-                try self.stack.popFrame(frame.frame_info);
-                self.frame = frame.prev;
-            },
+            opcodes.ret => try self.popFrame(frame),
             opcodes.const_0 => try self.stack.push(Value.CONST_0),
             opcodes.const_1 => try self.stack.push(Value.CONST_1),
             opcodes.i_const_0 => try self.stack.push(Value.I_CONST_0),
@@ -110,7 +134,7 @@ pub inline fn run(self: *Runtime) anyerror!void {
                     const result = lhs.asInt() + rhs.asInt();
                     try self.stack.push(Value.fromInt(result));
                 } else {
-                    return RuntimeError.type_error;
+                    return RuntimeError.TypeError;
                 }
             },
             opcodes.sub => {
@@ -124,14 +148,14 @@ pub inline fn run(self: *Runtime) anyerror!void {
                     const result = lhs.asInt() - rhs.asInt();
                     try self.stack.push(Value.fromInt(result));
                 } else {
-                    return RuntimeError.type_error;
+                    return RuntimeError.TypeError;
                 }
             },
             opcodes.mul => @panic("unimplemented"),
             opcodes.div => @panic("unimplemented"),
             opcodes.n_to_i => {
                 const value = try self.stack.pop();
-                if (!value.isNumber()) return RuntimeError.type_error;
+                if (!value.isNumber()) return RuntimeError.TypeError;
                 const float = value.asF64();
                 const raw_int: i32 = @intFromFloat(float);
                 try self.stack.push(Value.fromInt(raw_int));
@@ -143,7 +167,7 @@ pub inline fn run(self: *Runtime) anyerror!void {
             opcodes.i_div => try self.integerArith(.div),
             opcodes.i_to_n => {
                 const val = try self.stack.pop();
-                if (!val.isInt()) return RuntimeError.type_error;
+                if (!val.isInt()) return RuntimeError.TypeError;
                 const asFloat: f64 = @floatFromInt(val.asInt());
                 try self.stack.push(Value.fromF64(asFloat));
             },
@@ -152,22 +176,18 @@ pub inline fn run(self: *Runtime) anyerror!void {
             opcodes.i_ushr => @panic("unimplemented"),
             opcodes.i_neg => {
                 const b = try self.stack.pop();
-                if (!b.isInt()) return RuntimeError.type_error;
+                if (!b.isInt()) return RuntimeError.TypeError;
             },
             opcodes.i_and => try self.integerLogical(.@"and"),
             opcodes.i_or => try self.integerLogical(.@"or"),
             opcodes.i_xor => try self.integerLogical(.xor),
             opcodes.i_rem => try self.integerArith(.rem),
             opcodes.call_fn => {
-                const module_idx = self.read_u16();
-                const function_idx = self.read_u16();
-                const refs = frame.module.references;
+                const ref_idx = self.read_u16();
+                const ref = frame.module.reference_indexes[ref_idx];
 
-                const module_name = refs.modules[module_idx];
-                const function_name = refs.functions[function_idx];
-
-                const module = self.registry.fetchModule(module_name) orelse unreachable;
-                const fun = module.functions.get(function_name) orelse unreachable;
+                const module = ref.module;
+                const fun = ref.function;
 
                 const args = try self.stack.popN(fun.arity);
 
@@ -196,7 +216,7 @@ pub inline fn run(self: *Runtime) anyerror!void {
                 } else if (maybeFun.isFunction()) {
                     @panic("unimplemented");
                 } else {
-                    return RuntimeError.type_error;
+                    return RuntimeError.TypeError;
                 }
             },
             opcodes.if_zero => {
@@ -223,7 +243,7 @@ pub inline fn run(self: *Runtime) anyerror!void {
                 const rhs = try self.stack.pop();
                 const lhs = try self.stack.pop();
 
-                if (lhs.tag() != rhs.tag()) return RuntimeError.type_error;
+                if (lhs.tag() != rhs.tag()) return RuntimeError.TypeError;
 
                 const cmp = lhs.equal(rhs);
                 try self.stack.push(Value.fromBool(cmp));
@@ -239,7 +259,7 @@ pub inline fn run(self: *Runtime) anyerror!void {
                     const value = lhs.asInt() > rhs.asInt();
                     try self.stack.push(Value.fromBool(value));
                 } else {
-                    return RuntimeError.type_error;
+                    return RuntimeError.TypeError;
                 }
             },
             opcodes.cmp_lt => {
@@ -253,7 +273,7 @@ pub inline fn run(self: *Runtime) anyerror!void {
                     const value = lhs.asInt() < rhs.asInt();
                     try self.stack.push(Value.fromBool(value));
                 } else {
-                    return RuntimeError.type_error;
+                    return RuntimeError.TypeError;
                 }
             },
             opcodes.and_ => {
@@ -285,9 +305,9 @@ const integerArithType = enum {
 
 fn integerArith(self: *Runtime, comptime T: integerArithType) anyerror!void {
     const rhs = try self.stack.pop();
-    if (!rhs.isInt()) return RuntimeError.type_error;
+    if (!rhs.isInt()) return RuntimeError.TypeError;
     const lhs = try self.stack.pop();
-    if (!lhs.isInt()) return RuntimeError.type_error;
+    if (!lhs.isInt()) return RuntimeError.TypeError;
 
     const result = switch (T) {
         .add => lhs.asInt() +% rhs.asInt(),
@@ -308,9 +328,9 @@ const integerLogicalType = enum {
 
 fn integerLogical(self: *Runtime, comptime T: integerLogicalType) anyerror!void {
     const rhs = try self.stack.pop();
-    if (!rhs.isInt()) return RuntimeError.type_error;
+    if (!rhs.isInt()) return RuntimeError.TypeError;
     const lhs = try self.stack.pop();
-    if (!lhs.isInt()) return RuntimeError.type_error;
+    if (!lhs.isInt()) return RuntimeError.TypeError;
 
     const result = switch (T) {
         .@"and" => lhs.asInt() & rhs.asInt(),
@@ -342,7 +362,7 @@ fn applyFunction(self: *Runtime, fun: *object.FunctionObject, argc: u16) anyerro
         const partial = try self.gc.allocPartial(fun, args);
         try self.stack.push(partial);
     } else {
-        return RuntimeError.arity_error;
+        return RuntimeError.ArityError;
     }
 }
 
@@ -364,7 +384,7 @@ fn applyPartial(self: *Runtime, partial: *object.PartialObject, argc: u16) anyer
     } else if (arity < new_argc) {
         @panic("unimplemented");
     } else {
-        return RuntimeError.arity_error;
+        return RuntimeError.ArityError;
     }
 }
 
@@ -418,7 +438,7 @@ test "run function" {
     defer rt.deinit();
 
     rt.run() catch |e| switch (e) {
-        RuntimeError.type_error => std.debug.print("type_error\n", .{}),
+        RuntimeError.TypeError => std.debug.print("TypeError\n", .{}),
         else => std.debug.print("unknown error", .{}),
     };
 
